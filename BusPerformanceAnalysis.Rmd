@@ -1,0 +1,304 @@
+---
+title: 'Twin Cities Bus Shelter Performance'
+author: "Pippa Gallagher"
+output: 
+  html_document:
+    keep_md: TRUE
+    toc: TRUE
+    toc_float: TRUE
+    df_print: paged
+    code_download: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=TRUE, message=FALSE, warning=FALSE)
+```
+
+# Introduction
+
+Public Transportation holds a lot of significance in cities. For both residents and tourists, the efficiency and extent of a public transport system matters greatly on the quality of their time in a city. As a college student in a new city many get trapped around the campus and fail to explore other areas. Macalester students are know to experience this. The twin cities bus system is the core of its public transit but with recent cuts and frequency reductions many Minnesotans are left at a loss. This leads me to question why these cuts are happening. Does metro transit not see good enough results when funding buses? To read more about the issues around bus cuts in the twin cities: [MinnPost](https://www.minnpost.com/cityscape/2022/12/with-latest-service-cuts-metro-transit-needs-to-change-how-it-runs-the-bus-system/). In my research I will explore how funding has impacted ridership in the twin cities and where buses are performing the best. 
+
+
+## Research Question 
+>How does the funding of buses affect ridership on twin cities public transportation?  
+
+
+Funding data for the twin cities is not publicly available and so to answer this question, I will use bus shelters as the representation of public transportation funding. Living in such a cold climate bus shelters feel incredibly important to promote ridership and can be seen as a representation of where the government is focused on improving public transport and providing funding. Another hurtle to tackle is the changes in ridership that occurred due to COVID 19 over recent years. In 2017 the average weekday ridership was 264,347. In 2021 that number was reduced to 99,217. Because of this I could not simply look at increases in ridership but instead, if bus stops with shelters were performing better than expected according to current trends. 
+
+**Packages**
+The packages used for this analysis include leaflet, tidyverse, sf and ggplot2.
+
+```{r, include=FALSE}
+library(leaflet)
+library(tidyverse)
+library(sf) 
+library(ggplot2)
+```
+
+# Data
+
+The data used in my analysis comes from the MN Geospatial commons which acquires data from Metro Transit. There are four data sets that will be used in my research: Ridership from 2017, Ridership from 2021, Bus Shelters 2017 and Bus Shelters 2021 
+
+```{r, include=FALSE}
+ridership_2017 <- read_csv("/Users/pippagallagher/Desktop/ProjectsinDataScience/Project/CSV/csv_trans_stop_boardings_alightings/TransitStopsBoardingsAndAlightings2017.csv")
+```
+
+```{r, include=FALSE}
+ridership_2021 <- read_csv("/Users/pippagallagher/Desktop/ProjectsinDataScience/Project/CSV/csv_trans_stop_boardings_alightings/TransitStopsBoardingsAndAlightings2021.csv")
+```
+
+```{r, include=FALSE}
+bus_shelters_2021 <- read_sf("/Users/pippagallagher/Desktop/ProjectsinDataScience/Project/Shapefiles/shp_trans_bus_shelters/TransitShelters.shp")
+```
+
+
+```{r,include=FALSE}
+bus_shelters_2017 <- read_csv("/Users/pippagallagher/Desktop/ProjectsinDataScience/Project/CSV/fall 2017 shelters.csv")
+```
+
+#### Ridership Data
+This data is collected from September to December of the year, aggregated at a stop level. The data includes the average number of riders that board at that stop as well as the average number of riders that alight. For my research I will be looking on the data for boarding, called "Ons" in this data set. Each bus stop has a unique id code that was pivotal in the joining of ridership data to bus shelter data. Other variables used include: latitude and longitude and the schedule. I chose to look only at ridership during the weekday.  
+
+#### Bus Shelter Data 
+The Bus Shelter data is a list of all of the bus shelters in the twin cities bus system. Variables include: id codes, latitude and longitude, and characteristics of the shelter (does it have heating, lighting, solar?). The main variable I needed to use from this data set was the id codes so that I could add a variable to the ridership on whether the bus stop is actually a bus shelter. 
+
+#### Data Cleaning 
+
+The data cleaning process was as follows:
+
+**Ridership**
+
+The first step was to select only the weekday ridership and then combine the total number of boardings at each bus stop. Next I needed to join the ridership from 2017 with the ridership from 2021 by using the site_id.  
+```{r,include=FALSE}
+ridership_2017 <- ridership_2017 %>% 
+  filter(Schedule == "Weekday") %>% 
+  group_by(Site_id) %>% 
+  summarise(across(c(Ons, Offs), sum)) %>% 
+  rename(site_id = Site_id) %>% 
+  filter(Ons != 81311.4)
+```
+
+```{r,include=FALSE}
+ridership_2021 <- ridership_2021 %>% 
+  filter(Schedule == "Weekday") %>% 
+  group_by(Site_id) %>% 
+  summarise(across(c(Ons, Offs), sum)) %>% 
+  rename(site_id = Site_id)  
+```
+
+```{r,include=FALSE}
+allridership <-  full_join(ridership_2017, ridership_2021, by = "site_id") %>% 
+  rename(Ons2017 = Ons.x) %>% 
+  rename(Ons2021 = Ons.y) 
+```
+
+**Bus Shelters**
+
+For the Bus Shelter data I combined the two data sets using their shelter ids and then created a new variable with the date they were made (before 2017 or after 2017). 
+
+```{r,include=FALSE}
+## Bus stops without bus shelters 
+all_bus_shelters <- full_join(bus_shelters_2017, bus_shelters_2021, by = "shelter_id")
+
+all_bus_shelters <- all_bus_shelters %>% 
+  replace_na(list(site_id.x = 0))  
+  
+all_bus_shelters <- all_bus_shelters %>% 
+  mutate(bsmade = ifelse(all_bus_shelters$site_id.x == 0,"Made after 2017","Exists in 2017"))
+
+all_bus_shelters$site_id.x <- ifelse(all_bus_shelters$site_id.x == 0, all_bus_shelters$site_id.y, all_bus_shelters$site_id.x)
+
+all_bus_shelters <- all_bus_shelters %>% 
+  rename(site_id = site_id.x)
+  
+```
+
+**Joining the Data Sets**
+
+Finally I needed to work to get the site ids accurate for all points so that I could join the two data sets together. I removed the outliers from the data set with ridership above 1,000 in 2017 and above 600 in 2021 and then made sure the bus stops with no bus shelters were labeled.  
+```{r,include=FALSE}
+## Joining Ridership and Bus Shetlers 
+weekday <- full_join(all_bus_shelters,allridership, by = "site_id") %>% 
+  filter(Ons2017 < 1000) %>% #Removing the outliers
+  filter(Ons2021 < 600) %>% 
+  replace_na(list(bsmade = "No Bus Shelter"))
+```
+
+
+```{r,include=FALSE}
+# Bus stops without bus shelters 
+bus_stops <- weekday %>% 
+  filter(bsmade == "No Bus Shelter")
+```
+***
+
+# Visualizing the Data
+The first step is to visualize the changes in the ridership from 2017 to 2021. 
+
+```{r}
+  ggplot(weekday, aes(x = Ons2017, y = Ons2021, color = bsmade)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(bus_stops, mapping = aes(x = Ons2017, y = Ons2021), method = "lm", se=FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Ridership in 2017 vs 2021",
+    x = "Ridership in 2017",
+    y = "Ridership in 2021",
+    caption = "Pippa Gallagher",
+    color = "Bus Shelter History"
+  )
+```
+
+This graph shows the relationship between ridership in 2017 and ridership in 2021. Each dot is a bus stop and the value is the average number of boardings at said bus stop on a weekday. There is a positive linear relationship that is not very strong. The line represents a linear regression model of bus stops without bus shelters to show the trend ridership experienced with covid. 
+
+
+**Zooming in on ridership less than 100**
+
+```{r,include=FALSE}
+small_weekday <- weekday %>% 
+  filter(Ons2017 < 125) %>% 
+  filter(Ons2021 < 100) %>% 
+  filter(bsmade != "No Bus Shelter")
+
+small_weekday_subset <- bus_stops %>% 
+  filter(Ons2017 < 125) %>% 
+  filter(Ons2021 < 100)
+```
+
+
+```{r}
+ggplot(small_weekday, aes(x = Ons2017, y = Ons2021, color = bsmade)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(small_weekday_subset, mapping = aes(x = Ons2017, y = Ons2021), method = "lm", se=FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Lower Ridership Bus Stops",
+    subtitle = "Removing bus stops without a shelter for better visualization",
+    x = "Ridership in 2017",
+    y = "Ridership in 2021",
+    caption = "Pippa Gallagher",
+    color = "Bus Shelter History"
+  )
+```
+
+I wanted to see if this weak positive correlation continued in the lower left quadrant as this is where the majority of points are located. This graph shows that the correlation does continue and that it remains true for both bus stop with shelters prior to 2017 and bus stops with shelters made after 2017. 
+
+*** 
+
+# Performance Analysis  
+
+After looking at more complex models, a simple linear regression model seemed to represent the data the best and allowed for an analysis of the performance of bus shelters vs bus stops. The method for which I did this is to determine the ratio of bus stops that under performed (had a negative residual) vs over performed (had a positive residual) and see if the bus shelters had a higher ratio of positive residuals. This would indicate that in relation to the trend of bus ridership (due to COVID), the bus stops with shelters performed better than expected and that it is critical to keep funding buses. 
+
+```{r, include=FALSE}
+#Bus shelters that already existed in 2017 and ridership data 
+exists2017 <- weekday %>% 
+  filter(bsmade == "Exists in 2017") %>% 
+  mutate(id = row_number())
+```
+
+```{r, include=FALSE}
+#Bus shelters that did not exist in 2017 and ridership data 
+madeafter2017 <- weekday %>% 
+  filter(bsmade == "Made after 2017")  %>% 
+  mutate(id = row_number())
+```
+
+```{r}
+# Making a linear regression model for bus stop ridership
+model <- lm(Ons2021 ~ Ons2017, data = bus_stops)
+```
+
+## Resiudals 
+
+```{r}
+#Bus Stops Only
+ data.frame(resid(model)) %>% 
+  mutate(sign = ifelse( resid.model.> 0, "Positive","Negative")) %>% 
+  group_by(sign) %>% 
+  tally()
+```
+This table shows the number of bus stops that under performed (6,249), meaning they had lower ridership and those that over performed (1,956). Going forward I will compare the ratio of bus shelters' performance to see if they performed the same or if there was a statistically significant difference in their ratio.
+
+#### Made Before 2017 Residuals 
+```{r}
+predicted2017 <- data.frame(predict(object = model, newdata = exists2017,se = TRUE))
+```
+
+```{r}
+resid2017 <- exists2017$Ons2021 - predicted2017 
+
+resid2017 <- resid2017 %>% 
+  mutate(id = row_number())
+
+resid2017 %>% 
+  mutate(sign = ifelse(fit> 0, "Positive","Negative")) %>% 
+  group_by(sign) %>% 
+  tally()
+```
+For the bus shelters that already existed in 2017, 320 had lower ridership than expected and 581 had higher ridership than expected. This shows a reverse in what was expected according to the bus stops. 
+
+#### Made after 2017 Residuals
+
+```{r}
+predicted2021 <-  data.frame(predict(object = model, newdata = madeafter2017, se = TRUE))
+```
+
+```{r}
+resid2021 <- madeafter2017$Ons2021 - predicted2021
+
+resid2021 <- resid2021 %>% 
+  mutate(id = row_number())
+
+resid2021 %>% 
+  mutate(sign = ifelse(fit> 0, "Positive","Negative")) %>% 
+  group_by(sign) %>% 
+  tally()
+```
+For the bus shelters made after 2017, 25 had lower ridership than expected and 81 had higher ridership than expected. This follows the pattern of the bus shelters that already existed. The probability that this ratio could occur in the original data set is less than 0.00001%.   
+
+```{r, include=FALSE}
+# Adding the residuals for 2021 to bus shelter data set 
+weekdaywithresid <- full_join(madeafter2017, resid2021, by = "id")
+```
+
+```{r, include=FALSE}
+# Making a variable to represent whether the bus shelter performed better (pos) than expected or worse (neg)
+weekdaywithresid <- weekdaywithresid %>% 
+  mutate(sign = ifelse(fit > 0, "Positive","Negative"))
+```
+
+## Mapping the Bus Shelters and their Performance 
+
+Next I wanted to see where the bus shelters made after 2017 were located and if there were any spatial patterns related to their pattern. The following map shows the locations of each bus shelter, colored by their residual and sized by the size of their residual. The larger red circles show which bus shelters performed the worst and the larger purple circles show which performed the best. If the circle is small this means the model did a good job at predicting the ridership. 
+
+```{r, include=FALSE}
+pal <- colorFactor(palette = c("red","purple"), weekdaywithresid$sign)
+```
+
+
+```{r}
+leaflet(data = weekdaywithresid) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>% 
+    addCircleMarkers(lng = ~maplong, lat = ~maplat, color = ~pal(sign), radius = ~abs(fit)/5, label = ~Ons2021,
+                     weight = 1 ) %>% 
+    addLegend(position = "bottomleft", 
+            pal = pal,
+            values = ~sign,
+             title = "Residual") 
+```
+
+As we can see in this map, purple dominated the space, with many large circles concentrated in downtown Minneapolis and East Saint Paul. There also appears to be a north-south trend with bus stops located along a north/south route having good performance. The location near Brooklyn Park with a large negative residual could be due to a transit center that was opened nearby. The location had very high ridership in 2017 but dropped to 44 in 2021. Another theory is that this location is suburban and during COVID people did not commute into cities anymore. 
+
+***
+
+# Conclusion 
+
+**Limitations**
+
+The data that I worked with intersects with COVID which caused major decreases in bus ridership. While I found the best way to work around this dip in ridership I cannot say that my findings could be applied to other time periods. Analyses of other years would need to be conducted to determine if the trend found in my research is long term. Another limitation of this data set is that the site IDs are not always matched due to changes in location on street corners. This means that there are bus shelters that are classified as newly built but could have simply moved across the street. Lastly, the regression line I used to calculate residuals and analyze the performance of the bus stops was very limited in its explanation of ridership. 
+
+**Whats Next**
+
+If there was more time to work on the cleaning of the data it would have been interesting to see if there were any bus shelters that were removed and look at the changes in the ridership for those bus stops. It would also be beneficial to look further into spatial patterns and research why certain locations performed better. Could I explain the north-south trend? What happened in SouthEast Saint Paul that caused these positive residuals? 
+
+Overall, my research and analysis has shown how pivotal buses are in the twin cities and that they are in high demand. When Metro Transit puts money into buses, residents respond positively, even during a pandemic.   
